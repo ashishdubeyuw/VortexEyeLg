@@ -1,0 +1,5 @@
+{
+  "event": "test_log",
+  "message": "Dummy log to verify new PAT works",
+  "timestamp": "2026-02-28T21:02:57.683Z"
+}
