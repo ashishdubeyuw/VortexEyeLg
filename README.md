@@ -26,10 +26,10 @@ export GITHUB_PAT="your_token_here"
 
 ### 3) Use it in API calls
 
-Send the PAT as a bearer token:
+Use the token in the `Authorization` header (the `token` scheme is broadly compatible):
 
 ```http
-Authorization: Bearer <your_token_here>
+Authorization: token <your_token_here>
 ```
 
 ### Notes
