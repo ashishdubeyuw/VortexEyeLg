@@ -201,27 +201,26 @@ class IndoorVision {
         if (this.ocrReady || this.ocrLoading || !window.Tesseract) return;
         this.ocrLoading = true;
         try {
-            console.log('🔤 Loading Tesseract OCR worker...');
-            // Explicit CDN paths needed for Capacitor / Android WebView
-            const CDN = 'https://cdn.jsdelivr.net/npm';
+            console.log('🔤 Loading Tesseract OCR worker (local WASM bundle)...');
+            // Local paths — all files bundled in www/lib/tesseract/
+            const base = 'lib/tesseract';
             const opts = {
-                workerPath: `${CDN}/tesseract.js@4/dist/worker.min.js`,
-                corePath: `${CDN}/tesseract.js-core@4/tesseract-core.wasm.js`,
-                langPath: `${CDN}/tesseract.js-core@4/lang-data`,
+                workerPath: `${base}/worker.min.js`,
+                corePath: `${base}/tesseract-core.wasm.js`,
+                langPath: `${base}`,
                 cacheMethod: 'none',
                 logger: () => { }
             };
 
-            // Timeout guard: Tesseract worker hangs in some WebView builds
             const workerPromise = window.Tesseract.createWorker('eng', 1, opts);
-            const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('OCR worker timeout (15s)')), 15000));
+            const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('OCR worker timeout (20s)')), 20000));
             this.ocrWorker = await Promise.race([workerPromise, timeout]);
 
             await this.ocrWorker.setParameters({
                 tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,:;-/\\#()'
             });
             this.ocrReady = true;
-            console.log('🔤 Tesseract OCR ready');
+            console.log('🔤 Tesseract OCR ready (local)');
         } catch (e) {
             console.warn('🔤 Tesseract OCR init failed:', e.message || e);
             this.ocrWorker = null;
@@ -824,17 +823,17 @@ class IndoorVision {
             const { bbox, label, confidence, direction, distance, emoji, ocrText } = det;
 
             // 1. Draw glowing bounding box
-            this.ctx.strokeStyle = 'rgba(99, 102, 241, 0.8)';
-            this.ctx.lineWidth = 2;
+            this.ctx.strokeStyle = 'rgba(99, 102, 241, 0.9)';
+            this.ctx.lineWidth = 3;
             this.ctx.shadowColor = '#6366f1';
-            this.ctx.shadowBlur = 15;
+            this.ctx.shadowBlur = 18;
             this.ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
             this.ctx.shadowBlur = 0;
 
-            // Draw corner accents (Futuristic HUD feel)
-            const cornerLength = 20;
-            this.ctx.strokeStyle = '#10b981'; // Success Green
-            this.ctx.lineWidth = 4;
+            // Corner accents
+            const cornerLength = 22;
+            this.ctx.strokeStyle = '#10b981';
+            this.ctx.lineWidth = 5;
 
             // Top-left
             this.ctx.beginPath();
@@ -871,20 +870,20 @@ class IndoorVision {
             const ocrLine = ocrText ? `🔤 ${ocrText}` : null;
 
             // Measure text for background sizing
-            this.ctx.font = 'bold 16px Inter, sans-serif';
+            this.ctx.font = 'bold 18px Inter, sans-serif';
             const titleWidth = this.ctx.measureText(titleText).width;
 
-            this.ctx.font = '500 12px Inter, sans-serif';
+            this.ctx.font = '600 14px Inter, sans-serif';
             const subWidth = this.ctx.measureText(subText).width;
 
             let ocrWidth = 0;
             if (ocrLine) {
-                this.ctx.font = 'bold 13px Inter, sans-serif';
+                this.ctx.font = 'bold 15px Inter, sans-serif';
                 ocrWidth = this.ctx.measureText(ocrLine).width;
             }
 
-            const boxWidth = Math.max(titleWidth, subWidth, ocrWidth) + 32;
-            const boxHeight = ocrLine ? 72 : 54;
+            const boxWidth = Math.max(titleWidth, subWidth, ocrWidth) + 36;
+            const boxHeight = ocrLine ? 78 : 58;
 
             // 3. Determine AR Tag Position
             let tagY = bbox.y - boxHeight - 20;
@@ -901,19 +900,19 @@ class IndoorVision {
             this.ctx.beginPath();
             this.ctx.moveTo(bbox.x + (bbox.width / 2), pointerY);
             this.ctx.lineTo(bbox.x + (bbox.width / 2), tagY + (tagY < bbox.y ? boxHeight : 0));
-            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
-            this.ctx.lineWidth = 2;
-            this.ctx.setLineDash([4, 4]);
+            this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            this.ctx.lineWidth = 2.5;
+            this.ctx.setLineDash([5, 5]);
             this.ctx.stroke();
             this.ctx.setLineDash([]);
 
             // 5. Draw AR Tag Background — yellow accent border when OCR text is present
-            this.ctx.fillStyle = 'rgba(10, 10, 26, 0.88)';
-            this.ctx.strokeStyle = ocrLine ? 'rgba(250, 204, 21, 0.85)' : 'rgba(99, 102, 241, 0.6)';
-            this.ctx.lineWidth = ocrLine ? 2 : 1.5;
+            this.ctx.fillStyle = 'rgba(10, 10, 26, 0.9)';
+            this.ctx.strokeStyle = ocrLine ? 'rgba(250, 204, 21, 0.9)' : 'rgba(99, 102, 241, 0.7)';
+            this.ctx.lineWidth = ocrLine ? 2.5 : 2;
 
             this.ctx.beginPath();
-            this.ctx.roundRect(tagX, tagY, boxWidth, boxHeight, 8);
+            this.ctx.roundRect(tagX, tagY, boxWidth, boxHeight, 10);
             this.ctx.fill();
             this.ctx.stroke();
 
@@ -921,21 +920,21 @@ class IndoorVision {
             this.ctx.textAlign = 'center';
             const cx = tagX + boxWidth / 2;
 
-            // Title line
+            // Title line (bigger, bolder)
             this.ctx.fillStyle = '#ffffff';
-            this.ctx.font = 'bold 16px Inter, sans-serif';
-            this.ctx.fillText(titleText, cx, tagY + 22);
+            this.ctx.font = 'bold 18px Inter, sans-serif';
+            this.ctx.fillText(titleText, cx, tagY + 24);
 
-            // Sub line
+            // Sub line (bolder weight)
             this.ctx.fillStyle = '#10b981';
-            this.ctx.font = '500 12px Inter, sans-serif';
-            this.ctx.fillText(subText, cx, tagY + 40);
+            this.ctx.font = '600 14px Inter, sans-serif';
+            this.ctx.fillText(subText, cx, tagY + 44);
 
-            // OCR text line (yellow)
+            // OCR text line (yellow, bold)
             if (ocrLine) {
                 this.ctx.fillStyle = '#facc15';
-                this.ctx.font = 'bold 13px Inter, sans-serif';
-                this.ctx.fillText(ocrLine, cx, tagY + 60);
+                this.ctx.font = 'bold 15px Inter, sans-serif';
+                this.ctx.fillText(ocrLine, cx, tagY + 66);
             }
 
             this.ctx.textAlign = 'left';
