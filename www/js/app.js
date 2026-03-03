@@ -166,8 +166,7 @@ class VortexEyeApp {
                 this.voice.unlockAudio();
             }, { once: true });
 
-            // Initialize Hardware Barometer Polling (Simulated for MVP)
-            // Real implementation would use capacitor-plugin-barometer or Generic Sensor API
+            // Initialize Hardware Barometer Polling
             this._startBarometerPolling();
 
             // Welcome message
@@ -185,28 +184,38 @@ class VortexEyeApp {
     }
 
     /**
-     * Start pushing Barometer Hardware updates to the EKF Fusion Engine
+     * Start pushing native Barometer Hardware updates to the EKF Fusion Engine
      */
-    _startBarometerPolling() {
-        // MVP: Simulate a pressure sensor detecting an elevator ride or stairs
-        // In production, this binds to: new AbsoluteOrientationSensor() or Cap plugin
-        this.baseAltitude = 0;
-
-        setInterval(() => {
-            if (window.AntigravityEKF && window.AntigravityEKF.isInitialized) {
-                // Determine Z-axis drift / floor changes (simulating 3.5m floors)
-                // For demonstration, we'll slowly drift Z if 'demo' mode is active, or keep it 0
-                let simulatedAltMeters = this.baseAltitude;
-
-                // Demo: If indoor vision detects "Elevator", simulate going up a floor over 10s
-                if (this.vision && this.vision.currentTarget === 'elevator' && this.vision.detections.length > 0) {
-                    simulatedAltMeters += 0.5; // Rise half a meter per tick
-                    this.baseAltitude = simulatedAltMeters;
+    async _startBarometerPolling() {
+        try {
+            // Check if Native Barometer Plugin is available
+            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Barometer) {
+                console.log("🌡️ Checking Native Barometer availability...");
+                const baro = window.Capacitor.Plugins.Barometer;
+                const status = await baro.isSupported();
+                if (status && status.supported) {
+                    console.log("🌡️ Native Barometer supported. Starting listener.");
+                    // The plugin implementation details event emitting
+                    // Depending on the exact plugin, it might use general window events or plugin listeners
+                    await baro.start();
+                    // Fallback to window listener if plugin uses that, or addListener methods
+                    if (baro.addListener) {
+                        baro.addListener('barometerChange', (data) => {
+                            if (window.AntigravityEKF && window.AntigravityEKF.isInitialized) {
+                                // data.pressure is typically in hPa (hectopascals/millibars)
+                                window.AntigravityEKF.updatePressure(data.pressure);
+                            }
+                        });
+                    }
+                } else {
+                    console.warn("🌡️ Native Barometer not supported on this device.");
                 }
-
-                window.AntigravityEKF.predictElevation(simulatedAltMeters);
+            } else {
+                console.warn("🌡️ Native Barometer plugin not installed or injected.");
             }
-        }, 1000); // 1Hz Baro Polling
+        } catch (e) {
+            console.error("Failed to initialize hardware barometer:", e);
+        }
     }
 
     /**
@@ -271,9 +280,11 @@ class VortexEyeApp {
             // Autocomplete
             suggestionsDropdown: document.getElementById('suggestionsDropdown'),
 
-            // Step counter
+            // Step counter & Altitude
             stepCount: document.getElementById('stepCount'),
             userHeading: document.getElementById('userHeading'),
+            altitudeDisplay: document.getElementById('altitudeDisplay'),
+            altitudeVal: document.getElementById('altitudeVal'),
 
             // Position source indicator
             positionSource: document.getElementById('positionSource'),
@@ -1116,6 +1127,14 @@ class VortexEyeApp {
             case 'positionUpdate':
                 // Update mini-map with current indoor position
                 this.navigation.updateIndoorPosition(data.currentQuadrant, data.positionInQuadrant);
+                break;
+            case 'ekf_update':
+                // Update altitude display
+                if (this.elements.altitudeDisplay && this.elements.altitudeVal) {
+                    this.elements.altitudeDisplay.style.display = 'flex'; // reveal chip
+                    const floor = Math.round(data.z / 3.5); // ~3.5 meters per floor
+                    this.elements.altitudeVal.textContent = `${data.z.toFixed(1)}m (F${floor})`;
+                }
                 break;
             case 'instruction':
                 this.updateGuidance(data.icon, data.text);

@@ -1,0 +1,20 @@
+{
+  "appId": "org.vortexeye.app",
+  "appName": "VortexEye",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "allowNavigation": [
+      "raw.githubusercontent.com",
+      "cdnjs.cloudflare.com",
+      "unpkg.com"
+    ]
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false
+    }
+  }
+}
