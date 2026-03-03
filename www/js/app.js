@@ -161,6 +161,11 @@ class VortexEyeApp {
 
             console.log('📷 Camera will be initialized on-demand when indoor mode is activated');
 
+            // Unlock audio on first user interaction (required for Android WebView/Capacitor)
+            document.body.addEventListener('click', () => {
+                this.voice.unlockAudio();
+            }, { once: true });
+
             // Initialize Hardware Barometer Polling (Simulated for MVP)
             // Real implementation would use capacitor-plugin-barometer or Generic Sensor API
             this._startBarometerPolling();
@@ -280,7 +285,8 @@ class VortexEyeApp {
             audioToggle: document.getElementById('audioToggle'),
             aboutBtn: document.getElementById('aboutBtn'),
             aboutOverlay: document.getElementById('aboutOverlay'),
-            closeAboutBtn: document.getElementById('closeAboutBtn')
+            closeAboutBtn: document.getElementById('closeAboutBtn'),
+            exportLogsBtn: document.getElementById('exportLogsBtn')
         };
     }
 
@@ -436,6 +442,14 @@ class VortexEyeApp {
         if (this.elements.closeAboutBtn) {
             this.elements.closeAboutBtn.addEventListener('click', () => {
                 this.elements.aboutOverlay.classList.add('hidden');
+            });
+        }
+
+        if (this.elements.exportLogsBtn) {
+            this.elements.exportLogsBtn.addEventListener('click', () => {
+                if (this.logger) {
+                    this.logger.exportJSON();
+                }
             });
         }
 
