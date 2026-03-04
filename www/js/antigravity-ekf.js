@@ -13,7 +13,8 @@ class AntigravityEKF {
         // X = [x, y, z, vx, vy, vz, roll, pitch, yaw]^T
         // For simplicity in JS, we track these as explicit properties
         this.state = {
-            x: 0, y: 0, z: 0,           // Position in meters (local tangent plane relative to anchor)
+            x: 0, y: 0,
+            z: null,                    // Altitude (null until barometer initializes)
             vx: 0, vy: 0, vz: 0,        // Velocity in m/s
             roll: 0, pitch: 0, yaw: 0   // Orientation in radians
         };
@@ -46,6 +47,20 @@ class AntigravityEKF {
         // Global anchor reference (Lat/Lng origin for x,y conversion)
         this.gpsAnchor = null;
 
+        // EKF Barometer Processing
+        this.referencePressureP0 = 1013.25;
+        this.emaPressure = null;
+        this.emaAlpha = 0.15;
+
+        // Position history ring buffer for delayed measurement updates
+        this._posHistory = [];          // [{t, x, y, vx, vy}, ...]
+        this._posHistoryMax = 90;       // ~3s at 30Hz step rate
+
+        // Smooth correction accumulator (drained over successive predict calls)
+        this._pendingCorrX = 0;
+        this._pendingCorrY = 0;
+        this._corrDrainRate = 0.15;     // drain 15% per predict cycle
+
         // Listeners
         this.listeners = [];
     }
@@ -66,7 +81,6 @@ class AntigravityEKF {
         this.gpsAnchor = { lat, lng };
         this.state.x = 0;
         this.state.y = 0;
-        this.state.z = 0; // Ground floor
         this.state.yaw = heading * (Math.PI / 180);
 
         // Reset uncertainties
@@ -89,28 +103,42 @@ class AntigravityEKF {
     predictKinematics(isStep, dt) {
         if (!this.isInitialized) return;
 
-        // 1. Velocity Update (Dead Reckoning Step)
-        // Average human walking speed ~1.4 m/s. We inject velocity impulse if step detected.
         const strideLength = 0.75;
-        const speed = isStep ? (strideLength / dt) : (this.state.vx * 0.8); // Decay velocity if no step
+        const speed = isStep ? (strideLength / dt) : (this.state.vx * 0.8);
 
-        // Calculate velocity vector based on current yaw (heading)
         this.state.vx = speed * Math.sin(this.state.yaw);
-        this.state.vy = -speed * Math.cos(this.state.yaw); // Grid Y goes down as North goes up
-        this.state.vz = 0; // Z velocity is driven exclusively by Baro/Stairs
+        this.state.vy = -speed * Math.cos(this.state.yaw);
+        this.state.vz = 0;
 
-        // 2. Position Update
-        const newX = this.state.x + (this.state.vx * dt);
-        const newY = this.state.y + (this.state.vy * dt);
+        let newX = this.state.x + (this.state.vx * dt);
+        let newY = this.state.y + (this.state.vy * dt);
 
-        // 3. Constrain to 3D Architectural Matrix
+        // Drain pending delayed-vision correction (smooth glide)
+        if (this._pendingCorrX !== 0 || this._pendingCorrY !== 0) {
+            const drainX = this._pendingCorrX * this._corrDrainRate;
+            const drainY = this._pendingCorrY * this._corrDrainRate;
+            newX += drainX;
+            newY += drainY;
+            this._pendingCorrX -= drainX;
+            this._pendingCorrY -= drainY;
+            // Zero-out when negligible
+            if (Math.abs(this._pendingCorrX) < 0.01) this._pendingCorrX = 0;
+            if (Math.abs(this._pendingCorrY) < 0.01) this._pendingCorrY = 0;
+        }
+
         const constrained = this.constrainToGrid(newX, newY, this.state.z);
         this.state.x = constrained.x;
         this.state.y = constrained.y;
 
-        // 4. Increase Covariance (Uncertainty grows during prediction)
         this.P.pos += this.Q.pos * dt;
         this.P.vel += this.Q.vel * dt;
+
+        // Record to position history ring buffer
+        this._posHistory.push({
+            t: Date.now(), x: this.state.x, y: this.state.y,
+            vx: this.state.vx, vy: this.state.vy
+        });
+        if (this._posHistory.length > this._posHistoryMax) this._posHistory.shift();
 
         this.emitState();
     }
@@ -133,42 +161,64 @@ class AntigravityEKF {
     }
 
     /**
-     * Update step driven by native Hardware Barometer
-     * Calculates altitude using the hypsometric formula.
-     * @param {number} pressureHpa - Atmospheric pressure in hectopascals (millibars)
+     * Dynamically update the Sea Level Reference Pressure (QNH)
+     * This can be fed from a Weather API to adjust absolute altitude calculation.
+     * @param {number} p0_hpa - Local QNH in hPa (default: 1013.25 for standard atmosphere)
      */
-    updatePressure(pressureHpa) {
+    setReferencePressure(p0_hpa) {
+        if (p0_hpa > 850 && p0_hpa < 1100) {
+            this.referencePressureP0 = p0_hpa;
+            console.log(`🌌 EKF Reference Pressure Updated to ${this.referencePressureP0} hPa`);
+        }
+    }
+
+    /**
+     * Update step driven by native Hardware Barometer
+     * Calculates absolute altitude above sea level using the standard hypsometric formula.
+     * @param {number} rawPressureHpa - Raw atmospheric pressure from sensor in hectopascals (millibars)
+     */
+    updatePressure(rawPressureHpa) {
         if (!this.isInitialized) return;
 
-        // Calibrate baseline pressure (ambient atmospheric conditions at z=0)
-        // Usually, 1013.25 hPa is standard sea level, but we want relative altitude.
-        if (!this.baselinePressure) {
-            this.baselinePressure = pressureHpa;
-            console.log(`🌌 EKF Barometer Calibrated: Baseline ${this.baselinePressure.toFixed(2)} hPa`);
-            return;
+        // 1. Exponential Moving Average (EMA) to smooth hardware sensor noise
+        if (this.emaPressure === null) {
+            this.emaPressure = rawPressureHpa; // initialize instantly
+        } else {
+            this.emaPressure = (this.emaAlpha * rawPressureHpa) + ((1 - this.emaAlpha) * this.emaPressure);
         }
 
-        // Simplified hypsometric formula for small relative altitude changes
-        // Roughly ~8.3 meters per 1 hPa drop near sea level
+        // 2. Calculate altitude using the smoothed pressure against our Reference Pressure
         // alt = 44330 * (1 - (p / p0)^(1/5.255))
-        const altMeters = 44330.0 * (1.0 - Math.pow(pressureHpa / this.baselinePressure, 0.190295));
+        const absoluteAltMeters = 44330.0 * (1.0 - Math.pow(this.emaPressure / this.referencePressureP0, 0.190295));
 
-        // Let the EKF ingest the calculated altitude difference
-        this.predictElevation(altMeters);
+        // In a real production system with GPS, we would tie this absoluteAltMeters 
+        // to our GPS anchor's known elevation. Since we don't have a 3D building model 
+        // with absolute sea-level coordinates, we will just pipe this raw sea-level altitude 
+        // into the EKF.
+
+        this.predictElevation(absoluteAltMeters);
     }
 
     /**
      * Predict step driven by calculated Elevation
-     * @param {number} relativeAltMeters - Filtered altitude change from reference
+     * @param {number} absoluteAltMeters - Raw altitude above sea level
      */
-    predictElevation(relativeAltMeters) {
+    predictElevation(absoluteAltMeters) {
         if (!this.isInitialized) return;
 
         // Smooth heavily to ignore air conditioning drafts
         const alpha = 0.1;
-        this.state.z = (1 - alpha) * this.state.z + alpha * relativeAltMeters;
 
-        // Detect floor change (assume ~3.5m per floor)
+        // If this is the very first reading, snap to it immediately to set our baseline
+        if (this.state.z === null) {
+            this.state.z = absoluteAltMeters;
+        } else {
+            this.state.z = (1 - alpha) * this.state.z + alpha * absoluteAltMeters;
+        }
+
+        // Detect absolute floor (assume ~3.5m per floor)
+        // Since we are using absolute altitude, the raw number could be 140m (Floor 40 assuming sea level is F0)
+        // Without an absolute building anchor, we just show the raw absolute floor relative to sea level
         const currentFloor = Math.round(this.state.z / 3.5);
         if (currentFloor !== this.lastFloorEmitted) {
             this.lastFloorEmitted = currentFloor;
@@ -239,23 +289,55 @@ class AntigravityEKF {
     }
 
     /**
-     * Hard-snap Update from YOLOv8 Visual Odometry
-     * @param {number} anchorX - Exact local X of the POI
-     * @param {number} anchorY - Exact local Y of the POI
+     * Delayed Measurement Update from AI Visual Odometry.
+     * Retrodicts state to the frame capture time, computes the error
+     * between where the user was and where the POI is, then loads
+     * the correction into a smooth accumulator drained by predictKinematics.
+     * @param {number} anchorX - Exact local X of the detected POI
+     * @param {number} anchorY - Exact local Y of the detected POI
+     * @param {number} captureTs - Date.now() timestamp when the camera frame was grabbed
+     */
+    updateDelayedVision(anchorX, anchorY, captureTs) {
+        if (!this.isInitialized) return;
+
+        // 1. Find the closest history entry to the capture timestamp
+        let best = null, bestDt = Infinity;
+        for (const entry of this._posHistory) {
+            const d = Math.abs(entry.t - captureTs);
+            if (d < bestDt) { bestDt = d; best = entry; }
+        }
+
+        // Fallback: if no history or history too old (>3s), hard-snap as before
+        if (!best || bestDt > 3000) {
+            this.updateVisionSnap(anchorX, anchorY);
+            return;
+        }
+
+        // 2. Compute retrodicted error (where user was at capture vs ground truth)
+        const errX = anchorX - best.x;
+        const errY = anchorY - best.y;
+
+        // 3. Load into the smooth correction accumulator
+        this._pendingCorrX += errX;
+        this._pendingCorrY += errY;
+
+        // 4. Collapse covariance (we now have a high-confidence measurement)
+        this.P.pos = Math.min(this.P.pos, 0.5);
+
+        console.log(`👁️ Delayed Vision Update: err=(${errX.toFixed(2)}, ${errY.toFixed(2)}), lag=${bestDt}ms, pending=(${this._pendingCorrX.toFixed(2)}, ${this._pendingCorrY.toFixed(2)})`);
+    }
+
+    /**
+     * Legacy hard-snap (kept as fallback for zero-latency detections)
      */
     updateVisionSnap(anchorX, anchorY) {
         if (!this.isInitialized) return;
-
-        // Vision counts as an absolute ground truth (extremely low variance)
         const VISION_VAR = 0.01;
-
         const resX = this._kalmanUpdate1D(this.state.x, this.P.pos, anchorX, VISION_VAR);
         const resY = this._kalmanUpdate1D(this.state.y, this.P.pos, anchorY, VISION_VAR);
-
         this.state.x = resX.state;
         this.state.y = resY.state;
-        this.P.pos = VISION_VAR; // Collapse uncertainty bubble
-
+        this.P.pos = VISION_VAR;
         console.log(`👁️ Vision Anchor Snap -> X:${this.state.x.toFixed(2)}, Y:${this.state.y.toFixed(2)}`);
         this.emitState();
     }

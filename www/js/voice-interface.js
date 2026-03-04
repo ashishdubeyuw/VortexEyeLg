@@ -34,7 +34,8 @@ class VoiceInterface {
 
         try {
             console.log('🔓 Unlocking SpeechSynthesis engine...');
-            const utterance = new SpeechSynthesisUtterance('');
+            // Android sometimes drops completely empty strings
+            const utterance = new SpeechSynthesisUtterance('ready');
             utterance.volume = 0; // Silent
             utterance.rate = 1.0;
             utterance.pitch = 1.0;
@@ -208,6 +209,9 @@ class VoiceInterface {
             utterance.onerror = (e) => reject(e);
 
             this.synthesis.speak(utterance);
+            // Android workaround: occasionally the engine stalls; resume kicks it back into gear
+            if (this.synthesis.resume) this.synthesis.resume();
+
             console.log('🔊 Speaking:', text);
         });
     }

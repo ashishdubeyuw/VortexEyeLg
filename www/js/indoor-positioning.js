@@ -31,12 +31,27 @@ class IndoorPositioningService {
         // Listeners
         this.listeners = [];
 
+        // Strict Wheelchair Mode — treats inaccessible cells as absolute walls
+        this.isWheelchairModeRequired = false;
+
         // Scoring weights for multi-exit selection
         this.WEIGHTS = {
             PATH_LENGTH: 0.50,
             ACCESSIBILITY: 0.30,
             OUTDOOR_PROXIMITY: 0.20
         };
+    }
+
+    /**
+     * Toggle strict wheelchair-safe routing.
+     * When enabled, inaccessible cells (stairs) become absolute walls.
+     * @param {boolean} enabled
+     */
+    setWheelchairMode(enabled) {
+        this.isWheelchairModeRequired = !!enabled;
+        localStorage.setItem('vortex_wheelchair_mode', enabled ? '1' : '0');
+        console.log(`♿ Wheelchair mode: ${this.isWheelchairModeRequired ? 'ON' : 'OFF'}`);
+        this.notifyListeners('wheelchairMode', { enabled: this.isWheelchairModeRequired });
     }
 
     /**
@@ -194,13 +209,12 @@ class IndoorPositioningService {
      * Correct position drift using camera detection
      * When a known POI is detected, snap to the nearest matching quadrant
      */
-    correctWithDetection(detection) {
+    correctWithDetection(detection, captureTs) {
         if (!this.grid || !detection) return;
 
         const detectedType = detection.className || detection.label?.toLowerCase();
         if (!detectedType) return;
 
-        // Find the closest quadrant with this POI type
         let closestQ = null;
         let closestDist = Infinity;
 
@@ -222,14 +236,14 @@ class IndoorPositioningService {
         }
 
         if (closestQ && closestDist <= 3) {
-            // Use EKF Vision Snap Update to absolutely bind the state without snapping drift errors
             const absX = closestQ.col * this.cellSizeMeters;
             const absY = closestQ.row * this.cellSizeMeters;
 
             if (window.AntigravityEKF && window.AntigravityEKF.isInitialized) {
-                window.AntigravityEKF.updateVisionSnap(absX, absY);
+                // Use delayed vision update with temporal retrodiction
+                const ts = captureTs || Date.now();
+                window.AntigravityEKF.updateDelayedVision(absX, absY, ts);
             } else {
-                // Fallback MVP behavior
                 this.currentQuadrant = closestQ;
                 this.estimatedOffset = { x: absX, y: absY };
                 console.log(`🔧 Drift corrected → Q(${closestQ.col},${closestQ.row}) via ${detectedType} detection`);
@@ -364,11 +378,25 @@ class IndoorPositioningService {
      * @returns {object|null} Best candidate with route, or null
      */
     selectOptimalTarget(targetType, outdoorDest = null) {
-        const candidates = this.findAllCandidates(targetType);
+        let candidates = this.findAllCandidates(targetType);
 
         if (candidates.length === 0) {
             console.log(`❌ No ${targetType} found in building grid`);
             return null;
+        }
+
+        // Wheelchair pre-filter: drop candidates unreachable via accessible-only path
+        if (this.isWheelchairModeRequired) {
+            candidates = candidates.filter(c => {
+                const probe = this.calculateRoute(this.currentQuadrant, c.quadrant);
+                return probe !== null;
+            });
+
+            if (candidates.length === 0) {
+                console.warn('♿ No accessible routes available');
+                this.notifyListeners('noAccessibleRoute', { targetType });
+                return null;
+            }
         }
 
         this.allCandidates = this.scoreAndRankCandidates(candidates, outdoorDest);
@@ -472,6 +500,9 @@ class IndoorPositioningService {
 
                 const nQuad = this.grid[n.row][n.col];
                 if (!nQuad.walkable) continue;
+
+                // Wheelchair mode: inaccessible cells are absolute walls
+                if (this.isWheelchairModeRequired && !nQuad.accessible) continue;
 
                 const tentativeG = (gScore.get(curKey) || 0) + 1;
 

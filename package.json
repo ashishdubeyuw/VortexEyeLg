@@ -15,6 +15,7 @@
         "@capacitor/core": "^6.2.1",
         "@capacitor/filesystem": "^6.0.4",
         "@capacitor/geolocation": "^6.1.1",
+        "@capacitor/ios": "^6.2.1",
         "@capgo/capacitor-updater": "^6.3.3",
         "capacitor-barometer": "^1.0.1"
     }

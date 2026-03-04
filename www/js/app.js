@@ -9,7 +9,7 @@ class VortexEyeApp {
         this.location = new LocationService();
         this.navigation = new OutdoorNavigation();
         this.vision = new IndoorVision();
-        this.voice = new VoiceInterface();
+        this.voice = new NativeVoice();
         this.stepCounter = new StepCounter();
         this.indoorPos = new IndoorPositioningService();
         this.bluetooth = new BluetoothService(); // New Service
@@ -161,10 +161,14 @@ class VortexEyeApp {
 
             console.log('📷 Camera will be initialized on-demand when indoor mode is activated');
 
-            // Unlock audio on first user interaction (required for Android WebView/Capacitor)
-            document.body.addEventListener('click', () => {
-                this.voice.unlockAudio();
-            }, { once: true });
+            // Audio unlock (native voice handles this internally for Capacitor;
+            // for PWA fallback, unlockAudio() is called on first touch)
+            const unlockEvents = ['touchstart', 'pointerdown', 'click'];
+            const unlockHandler = () => {
+                if (this.voice) this.voice.unlockAudio();
+                unlockEvents.forEach(e => document.body.removeEventListener(e, unlockHandler));
+            };
+            unlockEvents.forEach(e => document.body.addEventListener(e, unlockHandler));
 
             // Initialize Hardware Barometer Polling
             this._startBarometerPolling();
@@ -501,6 +505,10 @@ class VortexEyeApp {
             case 'stop':
                 this.stopNavigation();
                 break;
+            case 'wheelchair':
+                this.indoorPos.setWheelchairMode(intent.enabled);
+                this.voice.speak(`Wheelchair mode ${intent.enabled ? 'enabled. Only accessible routes will be used.' : 'disabled.'}`);
+                break;
             default:
                 this.voice.speak("I didn't understand. Try saying 'Take me to' followed by a destination.");
         }
@@ -712,6 +720,15 @@ class VortexEyeApp {
                 this.updateStatus(target, `Route: ${result.pathLength} steps · Score ${result.score}`);
                 return;
             }
+
+            // Wheelchair safety fallback — no accessible route exists
+            if (this.indoorPos.isWheelchairModeRequired) {
+                const alert = 'No accessible routes available from your current location. Please call for assistance.';
+                this.voice.cancel().then(() => this.voice.speak(alert));
+                this.updateGuidance('♿', alert);
+                this.updateStatus(target, '⚠️ No accessible route');
+                return;
+            }
         }
 
         this.voice.speak(`Looking for ${target}. Rotate your camera slowly to scan the area.`);
@@ -772,7 +789,7 @@ class VortexEyeApp {
 
         // Indoor positioning drift correction
         if (this.indoorGridInitialized) {
-            this.indoorPos.correctWithDetection(detection);
+            this.indoorPos.correctWithDetection(detection, detection._frameTs);
             this.navigation.highlightCurrentQuadrant(this.indoorPos);
         }
 
@@ -1132,8 +1149,33 @@ class VortexEyeApp {
                 // Update altitude display
                 if (this.elements.altitudeDisplay && this.elements.altitudeVal) {
                     this.elements.altitudeDisplay.style.display = 'flex'; // reveal chip
-                    const floor = Math.round(data.z / 3.5); // ~3.5 meters per floor
-                    this.elements.altitudeVal.textContent = `${data.z.toFixed(1)}m (F${floor})`;
+
+                    // The EKF now emits absolute sea-level altitude based on hPa
+                    // (e.g. 140m assuming P0=1013.25hPa). 
+                    // We must zero it out the very first time we see it so the user starts at F0.
+                    if (this.baseAltitudeOffset === undefined) {
+                        this.baseAltitudeOffset = data.z;
+                        console.log(`🏔️ Zero'd Altitude Offset to ${this.baseAltitudeOffset.toFixed(1)}m`);
+                    }
+
+                    const relativeZ = data.z - this.baseAltitudeOffset;
+                    const floor = Math.round(relativeZ / 3.5); // ~3.5 meters per floor
+
+                    // Format floor (Negative floors = Basements)
+                    const floorStr = floor < 0 ? `B${Math.abs(floor)}` : `F${floor}`;
+
+                    // Determine Trajectory Trend
+                    const lastZ = this._lastRelativeZ !== undefined ? this._lastRelativeZ : relativeZ;
+                    const deltaZ = relativeZ - lastZ;
+                    this._lastRelativeZ = relativeZ;
+
+                    let trendIcon = '🏔️';
+                    // Need a small deadband to prevent flickering when standing still
+                    if (deltaZ > 0.1) trendIcon = '⬆️';
+                    else if (deltaZ < -0.1) trendIcon = '⬇️';
+
+                    const relativeFeet = relativeZ * 3.28084;
+                    this.elements.altitudeVal.textContent = `${trendIcon} ${relativeZ.toFixed(1)}m | ${relativeFeet.toFixed(0)}ft (${floorStr})`;
                 }
                 break;
             case 'instruction':
@@ -1252,29 +1294,37 @@ class VortexEyeApp {
      * Update status panel
      */
     updateStatus(target, status) {
-        this.elements.targetStatus.textContent = target || 'None';
-        this.elements.navStatus.textContent = status || 'Ready';
+        this.elements.targetStatus.textContent = this._sanitize(target || 'None');
+        this.elements.navStatus.textContent = this._sanitize(status || 'Ready');
     }
 
     /**
      * Update indoor guidance (uses the new top-center direction card)
      */
     updateGuidance(icon, text) {
-        // Update new indoor direction card (top center, like outdoor)
+        const safeIcon = this._sanitize(icon);
+        const safeText = this._sanitize(text);
+
         if (this.elements.indoorDirectionIcon) {
-            this.elements.indoorDirectionIcon.textContent = icon;
+            this.elements.indoorDirectionIcon.textContent = safeIcon;
         }
         if (this.elements.indoorDirectionText) {
-            this.elements.indoorDirectionText.textContent = text;
+            this.elements.indoorDirectionText.textContent = safeText;
         }
-
-        // Also update legacy elements if they exist (for compatibility)
         if (this.elements.guidanceIcon) {
-            this.elements.guidanceIcon.textContent = icon;
+            this.elements.guidanceIcon.textContent = safeIcon;
         }
         if (this.elements.guidanceText) {
-            this.elements.guidanceText.textContent = text;
+            this.elements.guidanceText.textContent = safeText;
         }
+    }
+
+    /** Strip non-ASCII emoji that break on some Android WebViews */
+    _sanitize(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}\u{2702}-\u{27B0}\u{1F900}-\u{1F9FF}\u{2B50}\u{26A0}\u{267F}\u{26D4}\u{2705}\u{274C}]/gu, '')
+            .replace(/^\s+/, '');
     }
 
     /**

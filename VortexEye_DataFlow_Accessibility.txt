@@ -5,7 +5,7 @@
 
 ## Mission Statement
 
-VortexEye is an AI-powered Progressive Web App (PWA) purpose-built for the **285 million visually impaired people worldwide and the 1 billion+ senior citizens** who need navigation assistance. Unlike Google Maps — which stops at the building entrance — VortexEye seamlessly guides users through indoor hallways, past doors, and out exits using nothing but a smartphone's built-in sensors. No special hardware. No app store. Just scan a QR code and start navigating with your voice.
+VortexEye is an AI-powered native Android App (via Capacitor) and Progressive Web App (PWA) purpose-built for the **285 million visually impaired people worldwide and the 1 billion+ senior citizens** who need navigation assistance. Unlike Google Maps — which stops at the building entrance — VortexEye seamlessly guides users through indoor hallways, past doors, and out exits using nothing but a smartphone's built-in sensors.
 
 ---
 
@@ -347,9 +347,33 @@ Position smoothed with 0.3 exponential moving average (anti-jitter)
 
 **Implementation Detail:** Since browsers can't scan BLE natively, the service accepts data from either a native app wrapper (`window.updateBeacons`) or the built-in simulation panel — making it demo-ready without physical beacon hardware.
 
-#### Layer 5: Sensor Fusion (The Orchestra)
+#### Layer 5: Hardware Barometer (Altimeter)
 
-All four layers feed into `IndoorPositioningService.updatePosition()`:
+```
+Pixel 6 / Device Barometer Sensor:
+  • Emits raw atmospheric pressure (hPa)
+     ↓
+AntigravityEKF Engine:
+  ├── Exponential Moving Average (EMA)
+  │   • Weights: 15% new reading, 85% historical
+  │   • Purpose: Eliminates sensor micro-jitter and drafts
+  │
+  ├── Hypsometric Equation (MSL Math)
+  │   • Uses Dynamic Reference Pressure (Default QNH: 1013.25hPa)
+  │   • Converts smoothed hPa → Absolute Meters above Sea Level
+     ↓
+UI & Floor Level Calculation:
+  • App sets baseline at first reading (0.0m offset)
+  • Calculates current Trajectory (⬆️, ⬇️, or 🏔️)
+  • Computes floor (3.5m per floor)
+  • Sub-zero altitudes formatted as Basements (B1, B2)
+```
+
+**Accessibility Detail:** Wheelchair and visually impaired users often need to know exactly which floor they are on inside a multistory clinical building. The native Barometer pipeline provides crucial Z-axis awareness without relying on GPS.
+
+#### Layer 6: Sensor Fusion (The Orchestra)
+
+All layers feed into `IndoorPositioningService.updatePosition()` and `AntigravityEKF`:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -368,6 +392,7 @@ All four layers feed into `IndoorPositioningService.updatePosition()`:
 │  OUTPUT: Estimated quadrant position (row, col)                │
 │  + GPS-equivalent coordinates for map display                   │
 │  + Heading direction + Step count                               │
+│  + Absolute Floor Level (Z-axis via Barometer)                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -605,6 +630,7 @@ The holy grail scenario for accessibility: **a visually impaired user inside a h
 | **OSRM** | Walking/driving route calculation | Step-by-step outdoor navigation |
 | **Nominatim** | Address → GPS geocoding | Destination resolution |
 | **Overpass API** | POI search (restaurants, stores) | Find nearby places |
+| **Capacitor Barometer** | Native Sensor Access | Absolute floor detection inside multi-story apps |
 
 ---
 
@@ -615,7 +641,7 @@ The holy grail scenario for accessibility: **a visually impaired user inside a h
 | **Frontend** | Vanilla HTML5 + CSS3 + JavaScript ES6 (no framework dependencies) |
 | **Mapping** | Leaflet.js (dynamically loaded) |
 | **Server** | Python HTTPS server with SSL/TLS |
-| **Platform** | Progressive Web App (installable, offline-capable) |
+| **Platform** | Native Android APK (Capacitor Wrapper) + PWA (Web Fallback) |
 | **Design** | Glassmorphism dark theme, 560+ line CSS design system, responsive |
 | **AI** | Client-side object detection (Phase 2: YOLOv8 via ONNX Runtime) |
 

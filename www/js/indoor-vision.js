@@ -25,6 +25,9 @@ class IndoorVision {
         this._lastAlpha = null;       // last deviceorientation alpha
         this._onOrientation = null;   // listener ref for cleanup
 
+        // Haptic/Audio spatial feedback for scan gate (accessibility)
+        this.scanFeedback = window.SpatialScanFeedback ? new SpatialScanFeedback() : null;
+
         // Sequence parameters for navigation_default
         this.navSequence = ['door', 'exit_sign', 'signboard', 'elevator'];
         this.currentSequenceIndex = 0;
@@ -212,13 +215,18 @@ class IndoorVision {
                 logger: () => { }
             };
 
-            const workerPromise = window.Tesseract.createWorker('eng', 1, opts);
+            const workerPromise = (async () => {
+                const worker = await window.Tesseract.createWorker(opts);
+                await worker.loadLanguage('eng');
+                await worker.initialize('eng');
+                return worker;
+            })();
+
             const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('OCR worker timeout (20s)')), 20000));
             this.ocrWorker = await Promise.race([workerPromise, timeout]);
 
-            await this.ocrWorker.setParameters({
-                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,:;-/\\#()'
-            });
+            // Removed tessedit_char_whitelist (letting the Tesseract language model use its full dict)
+
             this.ocrReady = true;
             console.log('🔤 Tesseract OCR ready (local)');
         } catch (e) {
@@ -383,14 +391,25 @@ class IndoorVision {
         const tctx = tmp.getContext('2d');
         tctx.drawImage(this.videoElement, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
+        // Preprocess: Grayscale conversion improves Tesseract binarization in natural scenes
+        const imgData = tctx.getImageData(0, 0, cropW, cropH);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+            const avg = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+            d[i] = d[i + 1] = d[i + 2] = avg; // Assign grayscale luminance to RGB channels
+        }
+        tctx.putImageData(imgData, 0, 0);
+
         try {
             const { data } = await this.ocrWorker.recognize(tmp);
             const raw = (data.text || '').trim();
-            if (!raw || data.confidence < 55) return;
+            // In-the-wild OCR confidences are very low due to lighting/shadows. 
+            // 30% is a much safer threshold for real-world signs.
+            if (!raw || data.confidence < 30) return;
 
-            // Clean and validate
-            const text = raw.replace(/[\n\r]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-            if (text.length < 3) return;
+            // Clean and validate via NLP post-processor
+            const text = this._cleanOCRText(raw);
+            if (!text || text.length < 2) return;
 
             console.log(`🔤 OCR detected: "${text}" (conf=${Math.round(data.confidence)}%)`);
 
@@ -435,8 +454,52 @@ class IndoorVision {
                 if (target) this.onDetectionCallback({ ...target, _ocrAnnounce: true });
             }
         } catch (e) {
-            // OCR errors are non-fatal
+            console.error('OCR Inference Error:', e);
         }
+    }
+
+    /**
+     * NLP post-processor for raw Tesseract OCR output.
+     * Strips noise chars, normalizes common OCR misreads,
+     * and validates the result is human-readable.
+     */
+    _cleanOCRText(raw) {
+        if (!raw) return null;
+
+        let t = raw;
+
+        // 1. Collapse whitespace and line breaks
+        t = t.replace(/[\n\r\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+        // 2. Strip non-printable and control characters
+        t = t.replace(/[^\x20-\x7E]/g, '');
+
+        // 3. Remove isolated single-char fragments (common OCR garbage)
+        //    e.g. "E x i t" → keep, but "a . # r" → junk
+        t = t.replace(/(?:^|\s)[^a-zA-Z0-9](?:\s|$)/g, ' ');
+
+        // 4. Strip sequences of 3+ punctuation/symbols
+        t = t.replace(/[^a-zA-Z0-9\s]{3,}/g, '');
+
+        // 5. Common OCR character substitution corrections
+        const subs = {
+            '|': 'I', '0': 'O', '1': 'I', '5': 'S',
+            '$': 'S', '@': 'A', '!': 'I'
+        };
+        // Only apply subs for isolated characters (not in numbers like "Room 501")
+        t = t.replace(/\b([|0158$@!])\b/g, (_, ch) => subs[ch] || ch);
+
+        // 6. Collapse repeated whitespace after all cleanup
+        t = t.replace(/\s{2,}/g, ' ').trim();
+
+        // 7. Readability check: must contain at least one 2+ letter word
+        const hasWord = /[a-zA-Z]{2,}/.test(t);
+        if (!hasWord) return null;
+
+        // 8. Capitalize first letter for TTS clarity
+        t = t.charAt(0).toUpperCase() + t.slice(1);
+
+        return t;
     }
 
     /**
@@ -615,6 +678,8 @@ class IndoorVision {
      */
     async _runRealInference(now) {
         try {
+            // Capture timestamp BEFORE inference — this is when the frame was actually grabbed
+            const frameTs = Date.now();
             const preds = await this.cocoModel.detect(this.videoElement);
             const W = this.canvasElement.width;
             const H = this.canvasElement.height;
@@ -626,7 +691,6 @@ class IndoorVision {
             preds.forEach(pred => {
                 if (pred.score < this.MIN_CONFIDENCE) return;
 
-                // Mapped class or generic fallback — NEVER drop a detection
                 const mapped = this.COCO_MAP[pred.class] || {
                     name: 'object', emoji: '📦', label: pred.class.charAt(0).toUpperCase() + pred.class.slice(1)
                 };
@@ -652,7 +716,8 @@ class IndoorVision {
                     direction: dir.direction, directionInfo: dir,
                     distanceMeters: parseFloat(estDist.toFixed(1)),
                     distance: this.metersToSteps(estDist),
-                    ocrText: null, lastSeen: now, cocoClass: pred.class
+                    ocrText: null, lastSeen: now, cocoClass: pred.class,
+                    _frameTs: frameTs  // Temporal sync: when the camera frame was captured
                 };
 
                 const existing = this.activeDetections.find(d => d.id === id);
@@ -966,16 +1031,22 @@ class IndoorVision {
     /** Begin tracking device rotation via deviceorientation */
     _startOrientationTracking() {
         this._stopOrientationTracking();
+        if (this.scanFeedback) this.scanFeedback.start();
         this._onOrientation = (e) => {
             if (this._scanComplete || e.alpha === null) return;
             if (this._lastAlpha === null) { this._lastAlpha = e.alpha; return; }
             let delta = Math.abs(e.alpha - this._lastAlpha);
-            if (delta > 180) delta = 360 - delta;   // wrap-around correction
+            if (delta > 180) delta = 360 - delta;
             this._scanRotation = Math.min(this._scanThreshold, this._scanRotation + delta);
             this._lastAlpha = e.alpha;
+
+            const progress = this._scanRotation / this._scanThreshold;
+            if (this.scanFeedback) this.scanFeedback.update(progress);
+
             if (this._scanRotation >= this._scanThreshold) {
                 this._scanComplete = true;
                 this._stopOrientationTracking();
+                if (this.scanFeedback) this.scanFeedback.complete();
                 console.log('✅ Scan complete — detection enabled');
                 if (this.onDetectionCallback) this.onDetectionCallback({ _scanDone: true });
             }
@@ -989,6 +1060,7 @@ class IndoorVision {
             window.removeEventListener('deviceorientation', this._onOrientation);
             this._onOrientation = null;
         }
+        if (this.scanFeedback) this.scanFeedback.stop();
     }
 
     /**
