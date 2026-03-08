@@ -1,0 +1,28 @@
+{
+  "name": "vortexeye-native-android",
+  "version": "1.2.0",
+  "description": "Native Android wrapper and hardened web assets for VortexEye",
+  "main": "index.js",
+  "scripts": {
+    "sync:android": "npx cap sync android",
+    "build:android:debug": "cd android && ./gradlew assembleDebug",
+    "bundle:ota": "cd www && zip -qr ../../www.zip ."
+  },
+  "keywords": [
+    "capacitor",
+    "android",
+    "accessibility",
+    "navigation"
+  ],
+  "author": "Ashish Dubey",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "leaflet": "^1.9.4"
+  }
+}

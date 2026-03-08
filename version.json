@@ -1,6 +1,8 @@
 {
-  "version": "1.1.36",
-  "url": "https://raw.githubusercontent.com/ashishdubeyuw/VortexEyeLg/main/www.zip",
-  "notes": "Auto-pushed from desktop",
-  "updated": 1772652793.56506
+  "version": "1.2.0",
+  "url": "https://raw.githubusercontent.com/ashishdubeyuw/VortexEyeLg/copilot/native-android-hardening/www.zip",
+  "notes": "Security hardening release with signed OTA metadata, local-only diagnostics, self-hosted libraries, and native Android packaging.",
+  "sha256": "94e782944141e2bcfd130b818debdf5fc5f12ec706f68748dea75ce5a1042942",
+  "signature": "MEYCIQChLwQBxRkF/E+r8S/ZIha4MA9awb8oK65owffyu2F9fwIhAKIzSduPxX7sAzZnFh6JQiSpnqwbd88Nr7doYRD1CX4J",
+  "updated": 1772928382.156647
 }

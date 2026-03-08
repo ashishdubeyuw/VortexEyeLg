@@ -4,3 +4,5 @@
 !version.json
 !.gitignore
 !SECURITY_ASSESSMENT_REPORT.md
+!native-android/
+!native-android/**
