@@ -1,0 +1,28 @@
+{
+  "id": "demo",
+  "name": "Demo Venue Free Indoor Graph",
+  "floors": [
+    { "level": 0, "name": "Ground Floor" },
+    { "level": 1, "name": "First Floor" }
+  ],
+  "nodes": [
+    { "id": "n0", "label": "Main Entry", "floor": 0, "x": 0.0, "y": 0.0, "lat": 47.620520, "lng": -122.349295, "tags": ["entry", "exit", "door"], "accessible": true },
+    { "id": "n1", "label": "Lobby", "floor": 0, "x": 5.0, "y": 0.0, "lat": 47.620520, "lng": -122.349230, "tags": ["hall"], "accessible": true },
+    { "id": "n2", "label": "Restroom", "floor": 0, "x": 10.0, "y": 0.0, "lat": 47.620520, "lng": -122.349165, "tags": ["restroom"], "accessible": true },
+    { "id": "n3", "label": "Elevator G", "floor": 0, "x": 5.0, "y": 5.0, "lat": 47.620565, "lng": -122.349230, "tags": ["elevator"], "accessible": true },
+    { "id": "n4", "label": "Stairs G", "floor": 0, "x": 9.0, "y": 5.0, "lat": 47.620565, "lng": -122.349180, "tags": ["stairs"], "accessible": false },
+    { "id": "n5", "label": "Elevator F1", "floor": 1, "x": 5.0, "y": 5.0, "lat": 47.620610, "lng": -122.349230, "tags": ["elevator"], "accessible": true },
+    { "id": "n6", "label": "Office Corridor", "floor": 1, "x": 8.0, "y": 5.0, "lat": 47.620610, "lng": -122.349195, "tags": ["hall"], "accessible": true },
+    { "id": "n7", "label": "Exit East", "floor": 1, "x": 12.0, "y": 5.0, "lat": 47.620610, "lng": -122.349145, "tags": ["exit", "door"], "accessible": true }
+  ],
+  "edges": [
+    { "from": "n0", "to": "n1", "length": 5.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.0 },
+    { "from": "n1", "to": "n2", "length": 5.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.0 },
+    { "from": "n1", "to": "n3", "length": 5.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.0 },
+    { "from": "n3", "to": "n4", "length": 4.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.2 },
+    { "from": "n3", "to": "n5", "length": 4.0, "bidirectional": true, "type": "elevator", "accessible": true, "congestionPenalty": 0.8 },
+    { "from": "n4", "to": "n6", "length": 4.5, "bidirectional": true, "type": "stairs", "accessible": false, "congestionPenalty": 0.0 },
+    { "from": "n5", "to": "n6", "length": 3.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.0 },
+    { "from": "n6", "to": "n7", "length": 4.0, "bidirectional": true, "type": "corridor", "accessible": true, "congestionPenalty": 0.0 }
+  ]
+}

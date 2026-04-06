@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Android/Gradle
+.gradle/
+build/
+**/build/
+
+# IDE
+.idea/
+*.iml
+
+# Local machine config
+local.properties
+
+# Logs/temp
+*.log
+*.tmp
+
+# Patch residue
+*.orig
+*.rej
+
+# OSMDroid/cache outputs (if generated)
+osmdroid/
